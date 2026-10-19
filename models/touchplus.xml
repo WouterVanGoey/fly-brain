@@ -1,0 +1,61 @@
+<mujoco model="touchplus_device">
+  <compiler angle="degree" coordinate="local"/>
+
+  <visual>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2"/>
+    <rgba haze="0.15 0.2 0.25 1"/>
+    <global fovy="50"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.4 0.5" rgb2="0.05 0.08 0.12" width="512" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1="0.1 0.12 0.15" rgb2="0.18 0.20 0.24"/>
+    <material name="grid_mat" texture="grid" texrepeat="20 20" reflectance="0.2"/>
+    <material name="aluminum" specular="0.85" shininess="0.7" rgba="0.82 0.84 0.88 1.0"/>
+    <material name="dark_lens" specular="0.95" shininess="0.9" rgba="0.08 0.08 0.12 1.0"/>
+    <material name="ir_led" specular="0.5" shininess="0.5" rgba="0.9 0.2 0.2 1.0" emission="0.6"/>
+    <material name="accent" specular="0.6" shininess="0.5" rgba="0.2 0.5 0.9 1.0"/>
+  </asset>
+
+  <worldbody>
+    <light directional="true" pos="0.5 -1.0 2.0" dir="-0.3 0.6 -1.0" diffuse="0.8 0.8 0.8" specular="0.4 0.4 0.4"/>
+    <geom name="floor" type="plane" size="1.0 1.0 0.01" material="grid_mat"/>
+
+    <!-- Stand base -->
+    <body name="stand_base" pos="0 0 0.01">
+      <geom type="cylinder" size="0.04 0.005" rgba="0.2 0.22 0.25 1.0"/>
+      <geom type="cylinder" size="0.006 0.05" pos="0 0 0.055" rgba="0.3 0.33 0.38 1.0"/>
+      <geom type="sphere" size="0.01" pos="0 0 0.11" rgba="0.15 0.15 0.18 1.0"/>
+    </body>
+
+    <!-- Touch+ Sensor Bar (free 3D position & orientation for IMU tracking) -->
+    <body name="touchplus_bar" pos="0 0 0.15">
+      <freejoint name="sensor_joint"/>
+      
+      <!-- Aluminum bar: 150mm length x 14mm depth x 16mm height -->
+      <geom name="chassis" type="box" size="0.075 0.007 0.008" material="aluminum" mass="0.085"/>
+
+      <!-- Dual camera lenses: 30mm baseline (pos x = -0.015 and +0.015, facing +y) -->
+      <geom name="lens_left" type="cylinder" size="0.0035 0.001" pos="-0.015 0.0075 0" euler="90 0 0" material="dark_lens"/>
+      <geom name="lens_right" type="cylinder" size="0.0035 0.001" pos="0.015 0.0075 0" euler="90 0 0" material="dark_lens"/>
+
+      <!-- Dual IR LEDs -->
+      <geom name="led_left" type="cylinder" size="0.002 0.0005" pos="-0.028 0.0075 0" euler="90 0 0" material="ir_led"/>
+      <geom name="led_right" type="cylinder" size="0.002 0.0005" pos="0.028 0.0075 0" euler="90 0 0" material="ir_led"/>
+
+      <!-- Center status indicator -->
+      <geom name="status_led" type="sphere" size="0.0015" pos="0 0.0075 0" material="accent"/>
+
+      <!-- Laptop clip attachment (rear) -->
+      <geom name="clip" type="box" size="0.015 0.01 0.006" pos="0 -0.012 -0.002" rgba="0.25 0.26 0.28 1.0"/>
+
+      <!-- IMU Sensor Site at physical center -->
+      <site name="imu_site" pos="0 0 0" size="0.002" rgba="1 0 0 1"/>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <accelerometer name="touchplus_accel" site="imu_site"/>
+    <gyro name="touchplus_gyro" site="imu_site"/>
+  </sensor>
+</mujoco>

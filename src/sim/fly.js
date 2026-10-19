@@ -63,6 +63,14 @@ export class FlyAgent {
     this.others = [];   // [{x,y,yaw}] of other flies (set by the host)
     this.log = [];
     this.takeoffPending = false;
+    this.externalVision = null;
+  }
+  setExternalVision(eyes) {
+    this.externalVision = eyes;
+    if (this.fv) {
+      if (eyes) this.fv.setExternalLuminance(eyes[0], eyes[1]);
+      else this.fv.setExternalLuminance(null, null);
+    }
   }
   // MuJoCo allocates the model and its data inside the emscripten heap, where nothing is reclaimed by the
   // garbage collector. An un-disposed fly costs about 28 MB of that heap, which is not much for one fly and

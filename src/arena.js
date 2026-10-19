@@ -14,6 +14,7 @@ import { allocBrainMemory, MAX_FLIES } from './brainsetup.js';
 import { parseFlyVis } from './flyvis.js';
 import { buildGroups } from './sim/groups.js';
 import { SCAFFOLD_IDS, createScaffoldSet } from './sim/scaffold/index.js';
+import { StereoVisionBridge } from './sim/stereo-input.js';
 const BASE = import.meta.env.BASE_URL; // "/" in dev, "/fly-brain/" on GitHub Pages
 
 const $ = s => document.querySelector(s);
@@ -39,7 +40,7 @@ const FLY_CAP = Math.min(MAX_FLIES, Math.max(1, Math.floor(Number(new URLSearchP
 const NO_VISION = ['0', 'false', 'off', 'no'].includes((new URLSearchParams(location.search).get('vision') || '').toLowerCase());
 const env = PRESET.env();
 const flies = [];          // {id, worker, group, bodies[], last, color, ready}
-let flyvisMap, shared, meta, bodymap, flyXML, gait, visual, batches, outputPass, running = false, selected = 0, tool = 'none', speed = 2, brainMem, wasmModule, brainParams, neuromodCalib;
+let flyvisMap, shared, meta, bodymap, flyXML, gait, visual, batches, outputPass, running = false, selected = 0, tool = 'none', speed = 2, brainMem, wasmModule, brainParams, neuromodCalib, stereoBridge;
 
 function toShared(ta) { const sab = new SharedArrayBuffer(ta.byteLength); const out = new ta.constructor(sab); out.set(ta); return out; }
 
@@ -77,6 +78,14 @@ async function main() {
   status('writing connectome and optic-lobe model into shared memory');
   brainMem = allocBrainMemory({ ...data, superclass: data.superclass }, shared.size, shared.sign, brainParams, FLY_CAP, vision);
   flyvisMap = fvm;
+  stereoBridge = new StereoVisionBridge(fvm, {
+    statusEl: $('#visionStatus'),
+    previewVideo: $('#camPreview'),
+    previewContainer: $('#camPreviewContainer'),
+    metaEl: $('#camMeta'),
+    deviceSelect: $('#camDeviceSelect'),
+    deviceRow: $('#camDeviceRow'),
+  });
   window.__data = data;
   buildBrainPanel(data);
   buildScene(data);
@@ -236,7 +245,10 @@ async function addFly(pos, yaw, sex = 'm') {
   return f;
 }
 function onWorker(f, m) {
-  if (m.type === 'ready') { f.ready = true; f.bodyNames = m.bodyNames; f.bodyGroups = m.bodyNames.map(n => f.bodies[n] || null); buildWingBlur(f, m.wingPoses); f.onReady?.(); }
+  if (m.type === 'ready') {
+    f.ready = true; f.bodyNames = m.bodyNames; f.bodyGroups = m.bodyNames.map(n => f.bodies[n] || null); buildWingBlur(f, m.wingPoses); f.onReady?.();
+    if (stereoBridge && stereoBridge.activeSource !== 'sim') f.worker.postMessage({ type: 'external_eyes', eyes: stereoBridge.lumEye });
+  }
   else if (m.type === 'pose') {
     f.prev = f.last; f.last = m; shadowDirty = true;
     const received = performance.now(); f.poseInterval = f.recvAt ? Math.max(16, Math.min(100, received-f.recvAt)) : 1000/30; f.recvAt = received;
@@ -260,6 +272,26 @@ function buildUI() {
   $('#play').onclick = () => { running = !running; for (const f of flies) f.worker.postMessage({ type: running ? 'run' : 'pause' }); $('#play').textContent = running ? '❚❚ Pause' : '▶ Run'; };
   $('#addFly').onclick = () => { const a = Math.random() * Math.PI * 2, r = Math.random() * env.arena.radius * 0.6; addFly([r * Math.cos(a), r * Math.sin(a)], Math.random() * Math.PI * 2); };
   $('#addFemale').onclick = () => { const a = Math.random() * Math.PI * 2, r = Math.random() * env.arena.radius * 0.6; addFly([r * Math.cos(a), r * Math.sin(a)], Math.random() * Math.PI * 2, 'f'); };
+  let fastMode = false;
+  const btnFast = $('#btnFastMode');
+  if (btnFast) {
+    btnFast.onclick = () => {
+      fastMode = !fastMode;
+      if (fastMode) {
+        btnFast.textContent = '⚡ Fast Mode: ON';
+        btnFast.style.background = '#22c55e';
+        btnFast.style.color = '#000';
+        if (gtao) gtao.enabled = false;
+        renderer.setPixelRatio(1.0);
+      } else {
+        btnFast.textContent = '⚡ Fast Mode';
+        btnFast.style.background = '#334155';
+        btnFast.style.color = '#fff';
+        if (gtao) gtao.enabled = true;
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      }
+    };
+  }
   $('#speed').oninput = e => { speed = +e.target.value; $('#speedv').textContent = speed.toFixed(2) + '×'; for (const f of flies) f.worker.postMessage({ type: 'speed', speed }); };
   $('#preset').innerHTML = Object.entries(PRESETS).map(([k, p]) => `<option value="${k}" ${k === presetKey ? 'selected' : ''}>${p.label}</option>`).join('');
   $('#preset').onchange = e => { location.search = '?env=' + e.target.value; };
@@ -271,6 +303,22 @@ function buildUI() {
   $('#light').oninput = e => { env.light.sky = +e.target.value; scene.background = new THREE.Color().setHSL(0.6, 0.3, 0.02 + 0.05 * env.light.sky); syncEnv(); };
   $('#threat').onclick = () => launchThreat();
   $('#takeoff').onclick = () => flies.find(x => x.id === selected)?.worker.postMessage({ type: 'takeoff' });
+  const vSrc = $('#visionSource'), vProj = $('#visionProjection');
+  if (vSrc && stereoBridge) {
+    vSrc.onchange = async () => {
+      const src = vSrc.value;
+      await stereoBridge.setSource(src, (eyes) => {
+        for (const f of flies) if (f.ready) f.worker.postMessage({ type: 'external_eyes', eyes });
+      });
+    };
+  }
+  if (vProj && stereoBridge) {
+    vProj.onchange = () => { stereoBridge.setMappingMode(vProj.value); };
+  }
+  const devSelect = $('#camDeviceSelect');
+  if (devSelect && stereoBridge) {
+    devSelect.onchange = () => { stereoBridge.startWebcam(devSelect.value); };
+  }
   buildScaffoldUI();
   setInterval(() => { if (foodDirty) { foodDirty = false; syncEnv(); envGroup.children.forEach(m => { if (m.userData.food) m.material.opacity = 0.35 + 0.65 * Math.min(1, m.userData.food.amount / 5); }); } renderFlyList(); }, 500);
 }

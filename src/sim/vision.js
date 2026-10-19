@@ -57,10 +57,25 @@ export class FlyVisionFV {
     }
     this.lumEye[0].set(this.lum.subarray(0, this.nCol)); this.lumEye[1].set(this.lum.subarray(this.nCol));
   }
+  setExternalLuminance(lumL, lumR) {
+    if (lumL && lumR) {
+      this.externalLum = [lumL, lumR];
+      this.settled = true;
+    } else {
+      this.externalLum = null;
+    }
+  }
   /** advance the optic-lobe models by 20 ms and emit rates via set(ixArray, hz) */
   update(set, env, albedo, dtMs) {
-    if (!this.settled) this.settle(env, albedo);
-    this.sample(env, albedo);
+    if (this.externalLum) {
+      this.lumEye[0].set(this.externalLum[0]);
+      this.lumEye[1].set(this.externalLum[1]);
+      this.lum.subarray(0, this.nCol).set(this.externalLum[0]);
+      this.lum.subarray(this.nCol).set(this.externalLum[1]);
+    } else {
+      if (!this.settled) this.settle(env, albedo);
+      this.sample(env, albedo);
+    }
     for (let s = 0; s < 2; s++) { this.eyes[s].setInput(this.lumEye[s]); this.eyes[s].step(); }
     const g = this.gain;
     for (let s = 0; s < 2; s++) { const v = this.eyes[s].v, P = this.pairs[s]; const one = [0];

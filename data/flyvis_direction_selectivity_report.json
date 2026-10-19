@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-10-19T13:28:09.361Z",
+  "evaluation": "FlyVis Drosophila Connectome Direction Selectivity Evaluation",
+  "model_nodes": 45669,
+  "model_edges": 1513231,
+  "ommatidia_count": 721,
+  "stimuli": {
+    "synthetic_grating": {
+      "spatial_k": 4,
+      "temporal_hz": 2,
+      "steps": 40,
+      "dt": 0.02,
+      "t4a_dsi": 1,
+      "t4b_dsi": 1,
+      "t4a_preferred_right": true,
+      "t4b_preferred_left": true,
+      "result": "PASS"
+    },
+    "touchplus_stereo_pan": {
+      "source_frame": "public/samples/touchplus_latest.png",
+      "pan_range_px": 60,
+      "steps": 30,
+      "t4a_dsi": 0.0515,
+      "t4b_dsi": 0.045,
+      "result": "PASS"
+    }
+  }
+}

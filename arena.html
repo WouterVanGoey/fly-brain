@@ -30,6 +30,7 @@
       <button id="play" class="primary">▶ Run</button>
       <button id="addFly">+ Fly</button>
       <button id="addFemale" title="Add a female fly (males court her)">+ ♀</button>
+      <button id="btnFastMode" title="Toggle 60 FPS Fast Mode: disables heavy GTAO postprocessing on older Macs" style="background:#22c55e;color:#000;font-weight:600;padding:4px 8px;border-radius:4px;border:none;cursor:pointer;">⚡ Fast Mode</button>
       <label>speed <input id="speed" type="range" min="0.05" max="2" step="0.05" value="2"><span id="speedv">2.00×</span></label>
     </div>
     <div class="row"><label>world <select id="preset"></select></label></div>
@@ -38,6 +39,34 @@
       <label><input type="checkbox" id="follow" checked> follow</label>
     </div>
     <div class="stats" id="clock"><div><b id="simt">0.0</b><span>sim s</span></div><div><b id="rt">–</b><span>× real time</span></div><div><b id="nfly">0</b><span>flies</span></div><div><b id="fps">0</b><span>fps</span></div></div>
+  <section>
+    <h2>Vision input (Binocular camera)</h2>
+    <div class="row">
+      <label>source <select id="visionSource">
+        <option value="sim">simulated arena</option>
+        <option value="touchplus_live">Touch+ live stream (bridge/workbench)</option>
+        <option value="touchplus_latest">Touch+ stereo snapshot</option>
+        <option value="touchplus_leds_on">Touch+ IR illuminated</option>
+        <option value="touchplus_leds_off">Touch+ IR off</option>
+        <option value="webcam">live camera / webcam</option>
+        <option value="loom">synthetic looming disc</option>
+        <option value="grating">moving optomotor grating</option>
+      </select></label>
+    </div>
+    <div class="row">
+      <label>projection <select id="visionProjection">
+        <option value="pinhole">frontal 75° (Touch+ camera)</option>
+        <option value="vr_panoramic">hemispherical 180° (VR fly rig)</option>
+      </select></label>
+    </div>
+    <div id="visionStatus" style="font-size:0.75rem;padding:5px 8px;border-radius:4px;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);color:#38bdf8;margin:6px 0;line-height:1.4;">Source: Simulated 3D arena</div>
+    <div class="row" id="camDeviceRow" hidden><label>camera <select id="camDeviceSelect" style="max-width:160px;"></select></label></div>
+    <div id="camPreviewContainer" hidden style="margin-top:6px;">
+      <video id="camPreview" autoplay playsinline muted style="width:100%;border-radius:4px;border:1px solid rgba(255,255,255,0.15);display:block;background:#000;max-height:110px;object-fit:contain;"></video>
+      <img id="camImgPreview" hidden style="width:100%;border-radius:4px;border:1px solid rgba(255,255,255,0.15);display:block;background:#000;max-height:110px;object-fit:contain;" />
+      <div id="camMeta" style="font-size:0.72rem;color:var(--dim);margin-top:2px;">Resolution: - | FPS: -</div>
+    </div>
+    <div class="note">Pipes binocular stereo image streams directly into the fly's 2 × 721 ommatidia, stimulating FlyVis optic-lobe neurons and connectome visual cortex in real time.</div>
   </section>
   <section>
     <h2>Place</h2>

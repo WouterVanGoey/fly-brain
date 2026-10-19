@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Touch+ 3D IMU Visualizer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #151922;
+    --border: #242c3d;
+    --acc: #38bdf8;
+    --text: #e2e8f0;
+    --dim: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #viewport {
+    flex: 1;
+    position: relative;
+  }
+  canvas#gl {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #sidebar {
+    width: 360px;
+    background: var(--card);
+    border-left: 1px solid var(--border);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
+  .subtitle { font-size: 0.85rem; color: var(--dim); margin-top: 4px; }
+  .card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card h2 {
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--dim);
+    margin-bottom: 12px;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+  }
+  .stat span { font-size: 0.75rem; color: var(--dim); text-transform: uppercase; }
+  .stat b { font-size: 1.4rem; color: var(--acc); font-family: monospace; }
+  .slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .slider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--dim);
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--acc);
+  }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+  }
+  button {
+    flex: 1;
+    background: #1e293b;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.15s;
+  }
+  button:hover { background: #334155; }
+  button.active { background: var(--acc); color: #000; font-weight: 600; border-color: var(--acc); }
+  .nav-link {
+    font-size: 0.85rem;
+    color: var(--acc);
+    text-decoration: none;
+    display: inline-block;
+  }
+  .nav-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="viewport">
+  <canvas id="gl"></canvas>
+</div>
+<aside id="sidebar">
+  <div>
+    <h1>Touch+ 3D IMU Visualizer</h1>
+    <div class="subtitle">Real-time orientation tracking & accelerometer vector</div>
+    <div style="margin-top: 8px;">
+      <a href="arena.html" class="nav-link">← Return to Fly Arena</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Orientation State</h2>
+    <div class="stat-grid">
+      <div class="stat"><span>Pitch</span><b id="pitchVal">0.0°</b></div>
+      <div class="stat"><span>Roll</span><b id="rollVal">0.0°</b></div>
+      <div class="stat"><span>Accel Magnitude</span><b id="accelMag">1.00 g</b></div>
+      <div class="stat"><span>Sensor FPS</span><b id="fpsVal">60</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="imuStatusBadge" style="font-size:0.75rem;padding:6px 10px;border-radius:4px;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);color:#38bdf8;margin-bottom:12px;font-weight:500;line-height:1.4;">Mode: Live Bridge Stream (Port 5174)</div>
+    <h2>Control Mode</h2>
+    <div class="btn-row">
+      <button id="btnBridge" class="active">Live Bridge</button>
+      <button id="btnDemo">Harmonic Demo</button>
+      <button id="btnManual">Manual Tilt</button>
+    </div>
+    <div class="btn-row" style="margin-top: 8px;">
+      <button id="btnReadIMU" title="Request single-shot IMU accelerometer read via active Workbench session">Read IMU</button>
+      <button id="btnStartCapture" title="Send Start capture command to TouchPlus Workbench">Start Capture</button>
+    </div>
+  </div>
+
+  <div class="card" id="lockNotice" style="display: none; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;">
+    <h2 style="color: #f87171; margin-bottom: 8px;">⚠️ Touch+ Locked by macOS</h2>
+    <p style="font-size: 0.8rem; line-height: 1.4; color: #fecaca;">
+      Touch+ was unplugged and replugged. When replugged, macOS automatically assigns its default UVCAssistant driver, preventing direct USB capture.
+      <br><br>
+      <b>To unlock live streaming:</b><br>
+      Open <b>TouchPlus Workbench</b>, click <b>"Prepare camera…"</b> (enter admin password to approve), then return here.
+    </p>
+  </div>
+
+  <div class="card" id="manualControls" style="display: none;">
+    <h2>Manual Tilt Controls</h2>
+    <div class="slider-group">
+      <div class="slider-row">
+        <div class="slider-label"><span>Pitch (tilt up/down)</span><span id="sliderPitchVal">0°</span></div>
+        <input type="range" id="pitchSlider" min="-90" max="90" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="slider-label"><span>Roll (tilt left/right)</span><span id="sliderRollVal">0°</span></div>
+        <input type="range" id="rollSlider" min="-90" max="90" value="0">
+      </div>
+      <div class="slider-row">
+        <div class="slider-label"><span>Yaw (heading)</span><span id="sliderYawVal">0°</span></div>
+        <input type="range" id="yawSlider" min="-180" max="180" value="0">
+      </div>
+      <button id="btnReset" style="margin-top: 8px;">Reset Level</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Device Specs</h2>
+    <p style="font-size: 0.8rem; color: var(--dim); line-height: 1.5;">
+      • Baseline: <b>30 mm</b> stereo separation<br>
+      • Sensor: <b>3-axis Accelerometer</b> (Etron eSP870)<br>
+      • Gravity pitch: θ = atan2(a<sub>y</sub>, √(a<sub>x</sub>² + a<sub>z</sub>²))<br>
+      • Gravity roll: φ = atan2(-a<sub>x</sub>, a<sub>z</sub>)<br>
+      • Chassis: 150 × 16 × 14 mm anodized aluminum
+    </p>
+  </div>
+</aside>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0b0e14');
+
+const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.01, 10);
+camera.position.set(0.18, 0.15, 0.28);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 0.02, 0);
+
+// Lighting
+const hemiLight = new THREE.HemisphereLight('#f8fafc', '#1e293b', 0.4);
+scene.add(hemiLight);
+
+const dirLight = new THREE.DirectionalLight('#ffffff', 1.5);
+dirLight.position.set(0.5, 1.2, 0.8);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(1024, 1024);
+scene.add(dirLight);
+
+// Floor grid
+const grid = new THREE.GridHelper(1.0, 20, '#38bdf8', '#1e293b');
+grid.position.y = -0.05;
+scene.add(grid);
+
+// ---------------- Build Touch+ 3D Model ----------------
+const touchGroup = new THREE.Group();
+touchGroup.position.set(0, 0.03, 0);
+
+// Aluminum chassis: 150mm x 16mm x 14mm
+const chassisGeo = new THREE.BoxGeometry(0.150, 0.016, 0.014);
+const chassisMat = new THREE.MeshStandardMaterial({
+  color: 0xd1d5db,
+  metalness: 0.85,
+  roughness: 0.25,
+});
+const chassis = new THREE.Mesh(chassisGeo, chassisMat);
+chassis.castShadow = true;
+touchGroup.add(chassis);
+
+// Dual front camera lenses: 30mm baseline (+/- 0.015m, facing +z)
+const lensGeo = new THREE.CylinderGeometry(0.0035, 0.0035, 0.001, 32);
+const lensMat = new THREE.MeshStandardMaterial({
+  color: 0x0f172a,
+  metalness: 0.9,
+  roughness: 0.1,
+});
+
+const lensL = new THREE.Mesh(lensGeo, lensMat);
+lensL.rotation.x = Math.PI / 2;
+lensL.position.set(-0.015, 0, 0.0075);
+touchGroup.add(lensL);
+
+const lensR = new THREE.Mesh(lensGeo, lensMat);
+lensR.rotation.x = Math.PI / 2;
+lensR.position.set(0.015, 0, 0.0075);
+touchGroup.add(lensR);
+
+// Dual IR LEDs (+/- 0.028m)
+const irGeo = new THREE.CylinderGeometry(0.002, 0.002, 0.0005, 16);
+const irMat = new THREE.MeshStandardMaterial({
+  color: 0xef4444,
+  emissive: 0xd97706,
+  emissiveIntensity: 0.6,
+});
+const irL = new THREE.Mesh(irGeo, irMat);
+irL.rotation.x = Math.PI / 2;
+irL.position.set(-0.028, 0, 0.0075);
+touchGroup.add(irL);
+
+const irR = new THREE.Mesh(irGeo, irMat);
+irR.rotation.x = Math.PI / 2;
+irR.position.set(0.028, 0, 0.0075);
+touchGroup.add(irR);
+
+// Center status indicator
+const ledGeo = new THREE.SphereGeometry(0.0015, 16, 16);
+const ledMat = new THREE.MeshStandardMaterial({
+  color: 0x38bdf8,
+  emissive: 0x0284c7,
+  emissiveIntensity: 0.8,
+});
+const led = new THREE.Mesh(ledGeo, ledMat);
+led.position.set(0, 0, 0.0075);
+touchGroup.add(led);
+
+// Coordinate axes arrow helper
+const axesHelper = new THREE.AxesHelper(0.04);
+touchGroup.add(axesHelper);
+
+scene.add(touchGroup);
+
+// ---------------- UI & Interaction ----------------
+let mode = 'bridge';
+const pitchValEl = document.getElementById('pitchVal');
+const rollValEl = document.getElementById('rollVal');
+const btnBridge = document.getElementById('btnBridge');
+const btnDemo = document.getElementById('btnDemo');
+const btnManual = document.getElementById('btnManual');
+const manualControls = document.getElementById('manualControls');
+
+const pitchSlider = document.getElementById('pitchSlider');
+const rollSlider = document.getElementById('rollSlider');
+const yawSlider = document.getElementById('yawSlider');
+
+const statusBadge = document.getElementById('imuStatusBadge');
+
+let bridgePitch = 0, bridgeRoll = 0, bridgeYaw = 0;
+
+btnBridge.onclick = () => {
+  mode = 'bridge';
+  btnBridge.classList.add('active');
+  btnDemo.classList.remove('active');
+  btnManual.classList.remove('active');
+  manualControls.style.display = 'none';
+  if (statusBadge) statusBadge.textContent = 'Mode: Live Bridge Stream (Port 5174)';
+};
+
+btnDemo.onclick = () => {
+  mode = 'demo';
+  btnDemo.classList.add('active');
+  btnBridge.classList.remove('active');
+  btnManual.classList.remove('active');
+  manualControls.style.display = 'none';
+  if (statusBadge) statusBadge.textContent = 'Mode: Harmonic Simulation Demo';
+};
+
+btnManual.onclick = () => {
+  mode = 'manual';
+  btnManual.classList.add('active');
+  btnBridge.classList.remove('active');
+  btnDemo.classList.remove('active');
+  manualControls.style.display = 'block';
+  if (statusBadge) statusBadge.textContent = 'Mode: Manual Interactive Sliders';
+};
+
+document.getElementById('btnReadIMU').onclick = async () => {
+  statusBadge.textContent = '⏳ Sending read_imu to Workbench...';
+  try {
+    const res = await fetch('http://127.0.0.1:5174/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'read_imu' })
+    });
+    const d = await res.json();
+    if (!d.accepted) statusBadge.textContent = `⚠️ ${d.error || 'Request not accepted'}`;
+  } catch (e) {
+    statusBadge.textContent = '❌ Bridge command failed';
+  }
+};
+
+document.getElementById('btnStartCapture').onclick = async () => {
+  statusBadge.textContent = '⏳ Sending start capture to Workbench...';
+  try {
+    const res = await fetch('http://127.0.0.1:5174/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start' })
+    });
+    const d = await res.json();
+    if (!d.accepted) statusBadge.textContent = `⚠️ ${d.error || 'Start not accepted'}`;
+  } catch (e) {
+    statusBadge.textContent = '❌ Bridge command failed';
+  }
+};
+
+async function pollBridge() {
+  if (mode !== 'bridge') return;
+  try {
+    const res = await fetch('http://127.0.0.1:5174/api/imu');
+    if (res.ok) {
+      const data = await res.json();
+      const lockCard = document.getElementById('lockNotice');
+
+      if (data.mode === 'usb_locked_by_macos') {
+        if (statusBadge) {
+          statusBadge.textContent = '🔴 Touch+ USB Locked by macOS (UVCAssistant)';
+          statusBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+          statusBadge.style.color = '#f87171';
+          statusBadge.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+        }
+        if (lockCard) lockCard.style.display = 'block';
+        bridgePitch = 0;
+        bridgeRoll = 0;
+        document.getElementById('accelMag').textContent = 'locked';
+        document.getElementById('fpsVal').textContent = '0';
+      } else if (data.mode === 'live_hardware' || (data.workbench_running && data.session_state === 'streaming')) {
+        if (statusBadge) {
+          statusBadge.textContent = `🟢 LIVE HARDWARE: Streaming (Pair #${data.sequence || 0})${data.raw_hex ? ` IMU: ${data.raw_hex}` : ''}`;
+          statusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
+          statusBadge.style.color = '#4ade80';
+          statusBadge.style.borderColor = 'rgba(34, 197, 94, 0.5)';
+        }
+        if (lockCard) lockCard.style.display = 'none';
+        if (data.raw_hex) {
+          bridgePitch = (data.pitch * Math.PI) / 180;
+          bridgeRoll = (data.roll * Math.PI) / 180;
+          const mag = Math.sqrt(data.ax * data.ax + data.ay * data.ay + data.az * data.az);
+          document.getElementById('accelMag').textContent = mag.toFixed(0) + ' raw';
+        } else {
+          document.getElementById('accelMag').textContent = 'streaming';
+        }
+        document.getElementById('fpsVal').textContent = '30';
+      } else if (data.workbench_running) {
+        if (statusBadge) {
+          const detail = data.message ? ` · ${data.message}` : '';
+          statusBadge.textContent = `🟡 Workbench: ${data.session_state} (Pair #${data.sequence || 0})${detail}`;
+          statusBadge.style.background = 'rgba(234, 179, 8, 0.15)';
+          statusBadge.style.color = '#facc15';
+          statusBadge.style.borderColor = 'rgba(234, 179, 8, 0.4)';
+        }
+        if (lockCard) lockCard.style.display = 'none';
+        if (data.raw_hex) {
+          bridgePitch = (data.pitch * Math.PI) / 180;
+          bridgeRoll = (data.roll * Math.PI) / 180;
+          const mag = Math.sqrt(data.ax * data.ax + data.ay * data.ay + data.az * data.az);
+          document.getElementById('accelMag').textContent = mag.toFixed(0) + ' raw';
+        }
+        document.getElementById('fpsVal').textContent = '0';
+      } else {
+        if (statusBadge) {
+          statusBadge.textContent = `⚪ Device Present: ${data.device_present ? 'Yes (VID 0x1e4e PID 0x0107)' : 'No'}`;
+          statusBadge.style.background = 'rgba(148, 163, 184, 0.15)';
+          statusBadge.style.color = '#94a3b8';
+          statusBadge.style.borderColor = 'rgba(148, 163, 184, 0.3)';
+        }
+        if (lockCard) lockCard.style.display = 'none';
+        document.getElementById('fpsVal').textContent = '0';
+      }
+    }
+  } catch (err) {
+    if (statusBadge) {
+      statusBadge.textContent = '🟡 Bridge disconnected (run scripts/touchplus_bridge_server.py)';
+      statusBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+      statusBadge.style.color = '#fbbf24';
+      statusBadge.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+    }
+  }
+}
+setInterval(pollBridge, 100);
+
+document.getElementById('btnReset').onclick = () => {
+  pitchSlider.value = 0;
+  rollSlider.value = 0;
+  yawSlider.value = 0;
+  updateManual();
+};
+
+function updateManual() {
+  document.getElementById('sliderPitchVal').textContent = pitchSlider.value + '°';
+  document.getElementById('sliderRollVal').textContent = rollSlider.value + '°';
+  document.getElementById('sliderYawVal').textContent = yawSlider.value + '°';
+}
+pitchSlider.oninput = updateManual;
+rollSlider.oninput = updateManual;
+yawSlider.oninput = updateManual;
+
+window.addEventListener('resize', () => {
+  camera.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+});
+
+// ---------------- Animation Loop ----------------
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const elapsed = clock.getElapsedTime();
+
+  let pitch = 0, roll = 0, yaw = 0;
+
+  if (mode === 'bridge') {
+    pitch = bridgePitch;
+    roll = bridgeRoll;
+    yaw = bridgeYaw;
+  } else if (mode === 'demo') {
+    pitch = 0.45 * Math.sin(elapsed * 1.5);
+    roll = 0.60 * Math.sin(elapsed * 1.0);
+    yaw = 0.25 * Math.sin(elapsed * 0.5);
+  } else {
+    pitch = (pitchSlider.value * Math.PI) / 180;
+    roll = (rollSlider.value * Math.PI) / 180;
+    yaw = (yawSlider.value * Math.PI) / 180;
+  }
+
+  touchGroup.rotation.set(pitch, yaw, roll, 'ZYX');
+
+  pitchValEl.textContent = ((pitch * 180) / Math.PI).toFixed(1) + '°';
+  rollValEl.textContent = ((roll * 180) / Math.PI).toFixed(1) + '°';
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
