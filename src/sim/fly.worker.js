@@ -37,6 +37,7 @@ onmessage = async (e) => {
   else if (m.type === 'scaffolds') fly.setScaffolds(m.scaffolds);
   else if (m.type === 'stimulate') fly.brain.setDrive(m.indices, m.rate);
   else if (m.type === 'external_eyes') { if (fly) fly.setExternalVision(m.eyes); }
+  else if (m.type === 'looming_threat') { if (fly) fly.pulseLoom(m.strength, m.critical); }
   else if (m.type === 'takeoff') { fly.requestTakeoff(); postPose(); }
   else if (m.type === 'activity') {
     const eyes = fly.fv ? fly.fv.lumEye.map(e => e.slice(0)) : null;
@@ -58,18 +59,36 @@ function postPose() {
     mn9: fly.motor.mean(fly.motor.muscles.find(x => x.name.startsWith('MN9'))?.idx || []), feeding: fly.motor.feeding(), heat: st.heat || 0, nSensory: fly.driven.length,
     foodEaten: fly.foodEaten.splice(0, fly.foodEaten.length, ...fly.foodEaten.map(() => 0)), behavior: fly.behavior(st), drive: fly.intrinsic?.label(), nm: fly.neuromod?.readout(), flying: fly.flight.active, flights: fly.flights, dist: fly.dist, jumps: fly.jumps, pos: st.pos, yaw: Math.atan2(fly.mjd.xmat[fly.bid.thorax * 9 + 3], fly.mjd.xmat[fly.bid.thorax * 9]) }, [p.xpos.buffer, p.xquat.buffer]);
 }
+
+// Zero-latency macro-task scheduler for Web Workers (bypasses setTimeout 1-4ms clamping)
+const tickChannel = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
+if (tickChannel) {
+  tickChannel.port1.onmessage = () => { loop(); };
+}
+function scheduleNextLoop() {
+  if (tickChannel) {
+    tickChannel.port2.postMessage(null);
+  } else {
+    timer = setTimeout(loop, 0);
+  }
+}
+
 async function loop() {
   if (!running || loopActive) return;
   loopActive = true;
   const now = performance.now(); simAhead += Math.min(100, now - lastReal) * speed; lastReal = now;
   const t0 = performance.now(); let steps = 0;
-  // Bound both CPU bursts and GPU work in flight. An unbounded compute queue stalls WebGL
-  // and leaves the motor reading increasingly old brain state when many flies share the GPU.
-  while (running && simAhead >= 1 && steps < 8 && performance.now() - t0 < 8) { fly.step(); simAhead -= 1; steps++; }
+  // Dynamic real-time step budget: allow up to 25 steps (25 ms sim) or 12 ms CPU time per slice,
+  // matching 60 FPS display frames and preventing worker idle stalls.
+  while (running && simAhead >= 1 && steps < 25 && performance.now() - t0 < 12) {
+    fly.step();
+    simAhead -= 1;
+    steps++;
+  }
   fly.brain.flush?.();
   if (steps && fly.brain.device) await fly.brain.device.queue.onSubmittedWorkDone();
-  if (simAhead > 50) simAhead = 50;   // can't keep up: run as fast as possible
+  if (simAhead > 60) simAhead = 60;   // Keep pace with wall clock
   if (steps && (!running || performance.now() - lastPose >= POSE_EVERY)) postPose();
   loopActive = false;
-  if (running) timer = setTimeout(loop, 0);
+  if (running) scheduleNextLoop();
 }

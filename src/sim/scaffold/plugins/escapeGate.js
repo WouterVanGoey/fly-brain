@@ -22,7 +22,8 @@ export function create() {
     step() {},
     /** signals: { frontTouch, nearAhead, bodyContact, avoiding, grooming, pivot } -> gated */
     gate(fly, s) {
-      if (s.frontTouch.left || s.frontTouch.right || s.nearAhead || s.bodyContact.left || s.bodyContact.right || s.avoiding || s.grooming) this.lastTouch = fly.t;
+      const nearVeto = fly.externalVision ? false : s.nearAhead;
+      if (s.frontTouch.left || s.frontTouch.right || nearVeto || s.bodyContact.left || s.bodyContact.right || s.avoiding || s.grooming) this.lastTouch = fly.t;
       if (s.pivot) this.lastPivot = fly.t;
       return fly.t - this.lastTouch < this.params.touchMs || fly.t - this.lastPivot < this.params.pivotMs;
     },

@@ -46,6 +46,11 @@ export class FlyAgent {
     // how a male starts courting before the cVA pheromone plume reaches him
     this.lc10 = { left: [], right: [] };
     for (let i = 0; i < typeOf.length; i++) if (/^LC10[ad]$/.test(typeOf[i])) this.lc10[sideOf[i] === 2 ? 'right' : 'left'].push(i);
+    this.lc4 = []; this.lplc2 = [];
+    for (let i = 0; i < typeOf.length; i++) {
+      if (typeOf[i].startsWith('LC4')) this.lc4.push(i);
+      else if (typeOf[i].startsWith('LPLC2')) this.lplc2.push(i);
+    }
     // vision: flyvis optic-lobe model driving the male-CNS optic lobe (if provided), else the simple photoreceptor eye
     this.fv = vision && flyvis ? new FlyVisionFV(mj, M, this.mjd, bodymap, flyvis.map, flyvis.eyes, this.bid.head, this.bid.thorax, flyvis.gain ?? 150, flyvis.vRest || null, flyvis.coupling || 'hard') : null;
     this.eye = vision && !this.fv ? new CompoundEye(mj, M, this.mjd, bodymap, this.bid.head, this.bid.thorax) : null;
@@ -58,6 +63,8 @@ export class FlyAgent {
     this.setScaffolds(brainOpts.scaffolds, brainOpts.scaffoldParams);
     this.flights = 0;
     this.driven = new Int32Array(0);
+    this._bodyDriven = new Int32Array(0);
+    this._eyeDriven = new Int32Array(0);
     // physiology
     this.energy = 0.6; this.health = 1; this.alive = true; this.eaten = 0; this.t = 0; this.foodEaten = env.food.map(() => 0); this.dist = 0; this.jumps = 0; this._lastPos = null; this._wasJumping = false;
     this.others = [];   // [{x,y,yaw}] of other flies (set by the host)
@@ -84,6 +91,15 @@ export class FlyAgent {
   }
 
   requestTakeoff() { if (this.alive && !this.flight.active) this.takeoffPending = true; }
+  pulseLoom(strength = 15, critical = false) {
+    if (this.brain && this.lc4 && this.lc4.length) {
+      this.brain.pulse(this.lc4, strength);
+      this.brain.pulse(this.lplc2, strength);
+    }
+    if (critical && this.alive && !this.flight.active) {
+      this.requestTakeoff();
+    }
+  }
   /** (re)build the scaffold set and hand the same one to every subsystem, so a kill switch turns a
    *  mechanism off everywhere at once. Called at construction (brainOpts.scaffolds) and live by the
    *  arena's scaffold toggles; rebuilding loses plugin state, which is fine for a debug toggle. */
@@ -152,11 +168,25 @@ export class FlyAgent {
     if (th) { d.mocap_pos[tm] = th.x; d.mocap_pos[tm + 1] = th.y; d.mocap_pos[tm + 2] = th.z; } else if (d.mocap_pos[tm + 2] > -10) d.mocap_pos[tm + 2] = -20;
     const st = this.state();
     const rates = this.senses.update(st, this.env, 1); this._sugar = st.sugar;
-    if (this.eye && (this.t % 10 === 0)) { this._eyeRates = new Map(); const er = this._eyeRates; this.eye.update({ set: (ix, hz) => { for (const i of ix) er.set(i, hz); } }, this.env, 10, this.albedo); }
-    if (this.fv && (this.t % 20 === 0)) { this._eyeRates = new Map(); const er = this._eyeRates; this.fv.update((ix, hz) => { for (const i of ix) er.set(i, hz); }, this.env, this.albedo, 20); }
-    if (this._eyeRates) for (const [i, hz] of this._eyeRates) rates.set(i, hz);
-    // apply sensory drive (clear neurons no longer driven)
-    const B = this.brain; for (const i of this.driven) B.setDriveOne(i, 0);
+    const B = this.brain;
+    if (this.eye && (this.t % 10 === 0)) {
+      const er = new Map();
+      this.eye.update({ set: (ix, hz) => { for (const i of ix) er.set(i, hz); } }, this.env, 10, this.albedo);
+      for (let k = 0; k < this._eyeDriven.length; k++) { const i = this._eyeDriven[k]; if (!er.has(i)) B.setDriveOne(i, 0); }
+      const ned = new Int32Array(er.size); let ek = 0;
+      for (const [i, hz] of er) { B.setDriveOne(i, hz); ned[ek++] = i; }
+      this._eyeDriven = ned;
+    }
+    if (this.fv && (this.t % 20 === 0)) {
+      const er = new Map();
+      this.fv.update((ix, hz) => { for (const i of ix) er.set(i, hz); }, this.env, this.albedo, 20);
+      for (let k = 0; k < this._eyeDriven.length; k++) { const i = this._eyeDriven[k]; if (!er.has(i)) B.setDriveOne(i, 0); }
+      const ned = new Int32Array(er.size); let ek = 0;
+      for (const [i, hz] of er) { B.setDriveOne(i, hz); ned[ek++] = i; }
+      this._eyeDriven = ned;
+    }
+    // apply body sensory drive (clear body neurons no longer driven)
+    for (let k = 0; k < this._bodyDriven.length; k++) { const i = this._bodyDriven[k]; if (!rates.has(i)) B.setDriveOne(i, 0); }
     if (this.neuromod) this.neuromod.update(1, this.energy, this.flight.active ? 1 : this.motor.stepAmp || 0);
     // courtship context for a male: the nearest other fly's range and bearing in his head frame, plus the
     // connectome's own courtship-circuit readout (pIP10, DNp13) from the previous step
@@ -196,7 +226,7 @@ export class FlyAgent {
     if (this.intrinsic) this.intrinsic.update(1, B, { energy: this.energy, arousal: this.neuromod?.arousal, touch: st.antTouch, rearing: st.pitchUp > 0.45 && this.motor.jumpT < 0 && !this.motor.righting,
       heat: { left: heatAt(st.antenna.left, this.env), right: heatAt(st.antenna.right, this.env) }, sugar: this._sugar || 0, flying: this.flight.active, ahead: st.ahead, court, suitor,
       mouthOnFood: this.env.food.some(f => f.amount > 0 && Math.hypot(st.labellum[0] - f.x, st.labellum[1] - f.y) < f.r - 0.02) });
-    const nd = new Int32Array(rates.size); let k = 0; for (const [i, hz] of rates) { B.setDriveOne(i, hz); nd[k++] = i; } this.driven = nd;
+    const nd = new Int32Array(rates.size); let bk = 0; for (const [i, hz] of rates) { B.setDriveOne(i, hz); nd[bk++] = i; } this._bodyDriven = nd; this.driven = nd;
     this.brain.step(); this.brain.step();
     // GF -> TTMn electrical synapse (not in the chemical connectome): GF spikes depolarise TTMn directly.
     // The `gfGap` scaffold plugin; off, the giant-fibre escape channel is closed.

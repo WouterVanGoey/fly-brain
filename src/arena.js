@@ -307,8 +307,13 @@ function buildUI() {
   if (vSrc && stereoBridge) {
     vSrc.onchange = async () => {
       const src = vSrc.value;
-      await stereoBridge.setSource(src, (eyes) => {
-        for (const f of flies) if (f.ready) f.worker.postMessage({ type: 'external_eyes', eyes });
+      await stereoBridge.setSource(src, (eyes, looming) => {
+        for (const f of flies) {
+          if (f.ready) {
+            if (eyes) f.worker.postMessage({ type: 'external_eyes', eyes });
+            if (looming && looming.looming) f.worker.postMessage({ type: 'looming_threat', strength: looming.strength, critical: looming.critical });
+          }
+        }
       });
     };
   }

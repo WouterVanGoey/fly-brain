@@ -95,6 +95,30 @@ def accel_to_pitch_roll(ax, ay, az):
     return math.degrees(pitch), math.degrees(roll)
 
 
+def ensure_workbench_streaming():
+    """Ensure TouchPlus Workbench is running and streaming in zero-prompt mode."""
+    try:
+        Path("/tmp/touchplus-prepared").touch()
+        app_path = "/Users/wouter/Code/TouchPlus/build/TouchPlus Workbench.app"
+        if not is_workbench_running() and os.path.isdir(app_path):
+            subprocess.Popen(["open", "-a", app_path])
+            time.sleep(1.0)
+
+        sess_dir = get_latest_session_dir()
+        if sess_dir:
+            app_state_file = sess_dir / "app-state.json"
+            if app_state_file.is_file():
+                with open(app_state_file, "r") as f:
+                    app_state = json.load(f)
+                curr_state = app_state.get("state", "")
+                if curr_state not in ("streaming", "opening"):
+                    cmd_file = sess_dir / "command.json"
+                    with open(cmd_file, "w") as f:
+                        json.dump({"id": f"auto_start_{int(time.time())}", "action": "start"}, f)
+    except Exception as e:
+        print(f"ensure_workbench_streaming error: {e}")
+
+
 def background_monitor():
     """Continuously monitors USB status and TouchPlus Workbench session."""
     global state
@@ -104,6 +128,12 @@ def background_monitor():
         try:
             present = check_usb_presence()
             wb_running = is_workbench_running()
+
+            # Auto-start workbench if hardware is present and not currently running or streaming
+            if present and not wb_running:
+                ensure_workbench_streaming()
+                wb_running = is_workbench_running()
+
             sess_dir = get_latest_session_dir()
 
             with lock:
@@ -177,6 +207,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -202,7 +233,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
-        elif self.path.startswith("/api/latest.png"):
+        elif self.path.startswith("/api/latest.png") or self.path.startswith("/api/frame"):
             # Serve the newest stereo frame from active session or fallback
             png_bytes = None
             seq = 0
@@ -235,6 +266,40 @@ class BridgeHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        elif self.path in ("/stream", "/api/stream.mjpg"):
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                while True:
+                    with lock:
+                        sess_path = state.get("active_session")
+                    png_bytes = None
+                    if sess_path:
+                        session_png = Path(sess_path) / "latest.png"
+                        if session_png.is_file():
+                            try:
+                                png_bytes = session_png.read_bytes()
+                            except Exception:
+                                pass
+                    if png_bytes is None and FALLBACK_PNG.is_file():
+                        try:
+                            png_bytes = FALLBACK_PNG.read_bytes()
+                        except Exception:
+                            pass
+                    if png_bytes:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/png\r\n")
+                        self.wfile.write(f"Content-Length: {len(png_bytes)}\r\n\r\n".encode("ascii"))
+                        self.wfile.write(png_bytes)
+                        self.wfile.write(b"\r\n")
+                    time.sleep(0.033)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         elif self.path == "/api/demo":
             # Explicit synthetic math demonstration

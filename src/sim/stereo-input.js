@@ -33,6 +33,65 @@ export class StereoVisionBridge {
     this.gratingPhase = 0;
     this.fpsCount = 0;
     this.lastFpsTime = performance.now();
+    this._prevLuminance = null;
+    this._prevLoomTime = 0;
+    this._prevRadius = 0;
+  }
+
+  detectLooming(lumL, lumR, now) {
+    if (!this._prevLuminance) {
+      this._prevLuminance = [new Float32Array(lumL), new Float32Array(lumR)];
+      this._prevLoomTime = now;
+      this._prevRadius = 0;
+      return null;
+    }
+    const dt = Math.max(1e-3, (now - this._prevLoomTime) / 1000);
+    this._prevLoomTime = now;
+
+    // Detect outward radial expansion in forward-facing ommatidia (LC4 / LPLC2 RF)
+    const dirsL = this.map.eyes.L.dirs;
+    let nDiff = 0, sumDist = 0;
+    for (let i = 0; i < this.nCol; i++) {
+      if (dirsL[i][0] > 0.25) { // forward visual field
+        const dL = Math.abs(lumL[i] - this._prevLuminance[0][i]);
+        if (dL > 0.08) {
+          nDiff++;
+          const angle = Math.acos(Math.max(-1, Math.min(1, dirsL[i][0])));
+          sumDist += angle;
+        }
+      }
+    }
+    this._prevLuminance[0].set(lumL);
+    this._prevLuminance[1].set(lumR);
+
+    if (nDiff < 10) {
+      this._prevRadius = 0;
+      return null;
+    }
+
+    const radius = sumDist / nDiff;
+    let isLooming = false, tau = 99;
+    if (this._prevRadius > 0.04) {
+      const dr = (radius - this._prevRadius) / dt;
+      if (dr > 0.12) { // rapidly expanding outward
+        tau = this._prevRadius / dr;
+        if (tau < 0.50 && nDiff > 20) {
+          isLooming = true;
+        }
+      }
+    }
+    this._prevRadius = 0.65 * this._prevRadius + 0.35 * radius;
+
+    if (isLooming) {
+      this.setStatus(`🚨 LOOMING DETECTED (Tau=${tau.toFixed(2)}s) → Escape Jump Triggered!`, false);
+      if (this.ui.statusEl) {
+        this.ui.statusEl.style.background = 'rgba(239, 68, 68, 0.25)';
+        this.ui.statusEl.style.borderColor = '#ef4444';
+        this.ui.statusEl.style.color = '#fca5a5';
+      }
+      return { looming: true, tau, critical: tau < 0.45, strength: Math.min(35, 15 + (0.50 - tau) * 40) };
+    }
+    return null;
   }
 
   setStatus(msg, isError = false) {
@@ -48,20 +107,17 @@ export class StereoVisionBridge {
     this.mappingMode = mode;
   }
 
-  /**
-   * Sample 721 ommatidia luminance from image data
-   * @param {ImageData} imgData 
-   * @param {'L'|'R'} side 
-   * @returns {Float32Array}
-   */
-  sampleEye(imgData, side) {
-    const { width: W, height: H, data } = imgData;
+  _getLut(side, W, H) {
+    if (!this._lutCache) this._lutCache = new Map();
+    const key = `${side}_${W}_${H}_${this.mappingMode}`;
+    let lut = this._lutCache.get(key);
+    if (lut) return lut;
+
+    lut = new Int32Array(this.nCol);
     const dirs = this.map.eyes[side].dirs;
-    const out = new Float32Array(this.nCol);
     const isL = side === 'L';
 
     if (this.mappingMode === 'vr_panoramic') {
-      // Cylindrical/spherical field mapping across eye visual field:
       for (let i = 0; i < this.nCol; i++) {
         const [x, y, z] = dirs[i];
         const az = Math.atan2(y, x) * 180 / Math.PI;
@@ -72,19 +128,17 @@ export class StereoVisionBridge {
 
         const px = Math.max(0, Math.min(W - 1, Math.floor(u * W)));
         const py = Math.max(0, Math.min(H - 1, Math.floor(v * H)));
-        const idx = (py * W + px) * 4;
-        out[i] = (0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]) / 255.0;
+        lut[i] = (py * W + px) * 4;
       }
     } else {
       // Pinhole camera projection:
       const fovH = 75 * Math.PI / 180;
       const f = (W / 2) / Math.tan(fovH / 2);
-      const ambient = 0.2;
 
       for (let i = 0; i < this.nCol; i++) {
         const [x, y, z] = dirs[i];
         if (x <= 0.05) {
-          out[i] = ambient;
+          lut[i] = -1;
           continue;
         }
 
@@ -94,11 +148,35 @@ export class StereoVisionBridge {
         if (u >= 0 && u < W && v >= 0 && v < H) {
           const px = Math.floor(u);
           const py = Math.floor(v);
-          const idx = (py * W + px) * 4;
-          out[i] = (0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]) / 255.0;
+          lut[i] = (py * W + px) * 4;
         } else {
-          out[i] = ambient;
+          lut[i] = -1;
         }
+      }
+    }
+    this._lutCache.set(key, lut);
+    return lut;
+  }
+
+  /**
+   * Sample 721 ommatidia luminance from image data
+   * @param {ImageData} imgData 
+   * @param {'L'|'R'} side 
+   * @returns {Float32Array}
+   */
+  sampleEye(imgData, side) {
+    const { width: W, height: H, data } = imgData;
+    const out = new Float32Array(this.nCol);
+    const lut = this._getLut(side, W, H);
+    const ambient = 0.2;
+    const inv255 = 1.0 / 255.0;
+
+    for (let i = 0; i < this.nCol; i++) {
+      const idx = lut[i];
+      if (idx >= 0) {
+        out[i] = (0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]) * inv255;
+      } else {
+        out[i] = ambient;
       }
     }
     return out;
@@ -236,7 +314,8 @@ export class StereoVisionBridge {
         if (this.activeSource !== 'webcam') return;
         if (this.video.readyState >= 2) {
           const eyes = this.processSideBySide(this.video);
-          if (this.onFrameCallback) this.onFrameCallback(eyes);
+          const looming = this.detectLooming(eyes[0], eyes[1], performance.now());
+          if (this.onFrameCallback) this.onFrameCallback(eyes, looming);
 
           this.fpsCount++;
           const now = performance.now();
@@ -263,7 +342,8 @@ export class StereoVisionBridge {
       const tick = () => {
         if (this.activeSource !== 'loom') return;
         const eyes = this.generateLoom();
-        if (this.onFrameCallback) this.onFrameCallback(eyes);
+        const looming = { looming: true, tau: 0.35, critical: this.loomRadius > 45, strength: 25 };
+        if (this.onFrameCallback) this.onFrameCallback(eyes, looming);
         setTimeout(() => { if (this.activeSource === 'loom') this.animId = requestAnimationFrame(tick); }, 30);
       };
       this.animId = requestAnimationFrame(tick);
@@ -314,7 +394,8 @@ export class StereoVisionBridge {
         liveImg.onload = () => {
           if (this.activeSource !== 'touchplus_live') return;
           const eyes = this.processSideBySide(liveImg);
-          if (this.onFrameCallback) this.onFrameCallback(eyes);
+          const looming = this.detectLooming(eyes[0], eyes[1], performance.now());
+          if (this.onFrameCallback) this.onFrameCallback(eyes, looming);
 
           if (imgEl && imgEl.src !== liveImg.src) {
             imgEl.src = liveImg.src;
