@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>C. elegans 3D Connectome Simulation — Frozen Cook et al. 2019 Connectome</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --bg: #060913;
+      --card: rgba(15, 23, 42, 0.88);
+      --border: rgba(56, 189, 248, 0.25);
+      --primary: #38bdf8;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --dim: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+    #canvas-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    .hud-overlay {
+      position: absolute;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .hud-overlay * {
+      pointer-events: auto;
+    }
+
+    /* Top Navigation Header */
+    header {
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 18px;
+      background: var(--card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .title-group h1 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .title-group p {
+      font-size: 0.74rem;
+      color: var(--dim);
+      margin-top: 2px;
+    }
+    .top-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .btn {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:hover {
+      background: #334155;
+      border-color: var(--primary);
+    }
+    .btn.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    }
+    .btn-threat {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: var(--danger);
+      color: #fca5a5;
+    }
+    .btn-threat:hover {
+      background: rgba(239, 68, 68, 0.35);
+    }
+
+    /* Side Panels */
+    .panel {
+      background: var(--card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      width: 295px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+    .panel-left {
+      top: 80px;
+      left: 12px;
+    }
+    .panel-right {
+      top: 80px;
+      right: 12px;
+    }
+    .panel-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--primary);
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 6px;
+    }
+
+    /* Command State & Threat Box */
+    .threat-box {
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: var(--primary);
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-align: center;
+      margin: 10px 0;
+      transition: all 0.2s ease;
+    }
+    .threat-box.active {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: var(--danger);
+      color: #fca5a5;
+      animation: pulseAlert 0.4s infinite alternate;
+    }
+    @keyframes pulseAlert {
+      from { box-shadow: 0 0 4px rgba(239, 68, 68, 0.3); }
+      to { box-shadow: 0 0 16px rgba(239, 68, 68, 0.7); }
+    }
+
+    /* Progress Bars */
+    .bar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 6px 0;
+      font-size: 0.75rem;
+    }
+    .bar-track {
+      width: 140px;
+      height: 8px;
+      background: #1e293b;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      background: var(--success);
+      width: 0%;
+      transition: width 0.05s ease;
+    }
+    .bar-fill.danger {
+      background: var(--danger);
+    }
+
+    /* Waveform Canvas */
+    #muscle-canvas {
+      width: 100%;
+      height: 70px;
+      background: #090d16;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      margin-top: 6px;
+      display: block;
+    }
+    .canvas-legend {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.68rem;
+      color: var(--dim);
+      margin-top: 4px;
+    }
+
+    /* Camera Viewport */
+    .cam-box {
+      width: 100%;
+      height: 125px;
+      background: #000;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      overflow: hidden;
+      position: relative;
+      margin-bottom: 6px;
+    }
+    #camera-preview-img, #camera-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .cam-status-tag {
+      position: absolute;
+      bottom: 4px;
+      left: 6px;
+      font-size: 0.68rem;
+      background: rgba(0, 0, 0, 0.75);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--primary);
+    }
+
+    /* Telemetry Grid */
+    .telem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-size: 0.72rem;
+      margin-top: 8px;
+    }
+    .telem-cell {
+      background: rgba(30, 41, 59, 0.5);
+      padding: 6px 8px;
+      border-radius: 4px;
+    }
+    .telem-cell span {
+      display: block;
+      color: var(--dim);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+    }
+    .telem-cell b {
+      font-size: 0.85rem;
+      color: #fff;
+    }
+
+    /* Footer Tip */
+    .footer-tip {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.75rem;
+      color: var(--dim);
+      background: rgba(15, 23, 42, 0.85);
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(8px);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- Top Header Navigation -->
+  <header class="hud-overlay">
+    <div class="title-group">
+      <h1>🪱 C. elegans Connectome Simulation <span id="lbl-graph-mode" style="font-size:0.75rem;font-weight:400;color:var(--primary);">Intact Biological Wiring</span></h1>
+      <p id="status-text">Loading Cook et al. 2019 Connectome...</p>
+    </div>
+    <div class="top-controls">
+      <div class="btn-group">
+        <button id="btn-intact" class="btn active">Intact Wiring</button>
+        <button id="btn-scramble" class="btn">Scrambled Null Control</button>
+      </div>
+      <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="chk-gap" checked> Gap Junctions
+      </label>
+      <button id="btn-threat" class="btn btn-threat">⚡ Noxious Touch Threat</button>
+      <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="chk-follow"> Chase Cam
+      </label>
+      <span style="font-size:0.75rem;color:var(--dim);margin-left:6px;"><b id="lbl-fps">60</b> FPS</span>
+    </div>
+  </header>
+
+  <!-- Left HUD: Connectome Command Circuits -->
+  <aside class="panel panel-left hud-overlay">
+    <div class="panel-title">
+      <span>Command Interneurons</span>
+      <span>AVA / AVB Switch</span>
+    </div>
+    <div class="bar-row">
+      <span>AVB / PVC (Forward)</span>
+      <div class="bar-track"><div id="bar-avb" class="bar-fill"></div></div>
+    </div>
+    <div class="bar-row">
+      <span>AVA / AVD (Reverse)</span>
+      <div class="bar-track"><div id="bar-ava" class="bar-fill danger"></div></div>
+    </div>
+    <div id="command-alert" class="threat-box">
+      🟢 FORWARD CRAWL: AVB/PVC Active
+    </div>
+
+    <!-- Body Wall Muscle Activation Waves -->
+    <div class="panel-title" style="margin-top:12px;">
+      <span>Body Wall Muscles</span>
+      <span>Dorsal vs Ventral</span>
+    </div>
+    <canvas id="muscle-canvas" width="265" height="70"></canvas>
+    <div class="canvas-legend">
+      <span style="color:#38bdf8;">■ Dorsal Muscle Wave (dBWM)</span>
+      <span style="color:#ec4899;">■ Ventral Muscle Wave (vBWM)</span>
+    </div>
+
+    <!-- Sensory Telemetry -->
+    <div class="panel-title" style="margin-top:12px;">
+      <span>Sensory Neurons</span>
+      <span>Noxious & Chem</span>
+    </div>
+    <div class="telem-grid">
+      <div class="telem-cell">
+        <span>ASH / ALM Threat</span>
+        <b id="lbl-ash">0.00</b>
+      </div>
+      <div class="telem-cell">
+        <span>Head Steering Bias</span>
+        <b id="lbl-head-turn">0.0</b>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Right HUD: Vision & Agar Navigation -->
+  <aside class="panel panel-right hud-overlay">
+    <div class="panel-title">
+      <span>Vision & Threat Sensor</span>
+      <select id="vision-source" style="background:#1e293b;color:#fff;border:none;font-size:0.7rem;border-radius:4px;padding:2px 4px;">
+        <option value="touchplus">Touch+ Live (Bridge)</option>
+        <option value="webcam">Webcam / Leap Motion</option>
+        <option value="sim_threat">Virtual 3D Pipette Threat</option>
+      </select>
+    </div>
+
+    <!-- Camera Viewport -->
+    <div class="cam-box">
+      <img id="camera-preview-img" crossorigin="anonymous" src="http://127.0.0.1:5174/api/latest.png" alt="Touch+ Camera Feed" />
+      <video id="camera-video" autoplay playsinline muted style="display:none;"></video>
+      <div class="cam-status-tag" id="cam-status">Touch+ Stereo Bridge (127.0.0.1:5174)</div>
+    </div>
+
+    <!-- Agar Arena Controls -->
+    <div class="panel-title" style="margin-top:10px;">
+      <span>Agar Arena & Foraging</span>
+      <button id="btn-random-food" style="background:#1e293b;color:var(--primary);border:none;font-size:0.68rem;cursor:pointer;padding:2px 6px;border-radius:4px;">Randomize</button>
+    </div>
+    <div class="telem-grid">
+      <div class="telem-cell">
+        <span>Distance to OP50 Lawn</span>
+        <b id="lbl-dist-food">1.10 mm</b>
+      </div>
+      <div class="telem-cell">
+        <span>Reset Worm</span>
+        <button id="btn-reset" style="background:#1e293b;color:var(--dim);border:none;font-size:0.75rem;cursor:pointer;padding:2px 4px;border-radius:4px;">Reset</button>
+      </div>
+    </div>
+
+    <!-- Biological Realism Note -->
+    <div style="font-size:0.68rem;color:var(--dim);margin-top:12px;line-height:1.4;background:rgba(30,41,59,0.3);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);">
+      🔬 <b>Biophysical Reality</b>: 454 cells from Cook et al. 2019. Graded potentials & gap junctions. 100% frozen biological weights without artificial RL retraining.
+    </div>
+  </aside>
+
+  <!-- Bottom Tip -->
+  <div class="footer-tip hud-overlay">
+    💡 Click on the agar plate to place OP50 bacterial food · Wave hand toward Touch+ or click "Noxious Touch Threat" to trigger AVA reversal
+  </div>
+
+  <script type="module" src="/src/worm/app.js"></script>
+</body>
+</html>

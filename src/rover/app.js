@@ -5,18 +5,21 @@
 import { RoverArena } from './arena.js';
 import { RobotSimulator } from './robot.js';
 import { ExcisedFlyBrain } from './brain.js';
+import { CelegansConnectomeEngine } from '../sim/worm_brain.js';
 
 class RoverApp {
   constructor() {
     this.container = document.getElementById('canvas-container');
     this.arena = new RoverArena(this.container);
     this.robot = new RobotSimulator(this.arena.scene, 'tank');
-    this.brain = new ExcisedFlyBrain({
+    this.flyBrain = new ExcisedFlyBrain({
       steerGain: 2.5,
       baseSpeed: 0.70,
       escapeSpeed: 1.0,
       threatThreshold: 0.50
     });
+    this.wormBrain = null;
+    this.brainType = 'fly'; // 'fly' or 'worm'
 
     this.running = true;
     this.lastTime = performance.now();
@@ -31,6 +34,7 @@ class RoverApp {
     this.lastThreatData = null;
     this.videoElement = document.getElementById('camera-video');
 
+    this.loadWormConnectome();
     this.initUI();
     this.initCompassCanvas();
     this.setupCameraStream();
@@ -38,6 +42,16 @@ class RoverApp {
     // Start simulation loop
     this.animate = this.animate.bind(this);
     requestAnimationFrame(this.animate);
+  }
+
+  loadWormConnectome() {
+    fetch('/data/celegans_connectome.json')
+      .then(r => r.json())
+      .then(data => {
+        this.wormBrain = new CelegansConnectomeEngine(data);
+        console.log('C. elegans connectome loaded for rover navigation');
+      })
+      .catch(err => console.warn('Could not load worm connectome:', err));
   }
 
   initUI() {
@@ -68,6 +82,18 @@ class RoverApp {
       this.setupCameraStream();
     };
 
+    // Brain connectome mode selector
+    const selBrain = document.getElementById('brain-mode');
+    if (selBrain) {
+      selBrain.onchange = (e) => {
+        this.brainType = e.target.value;
+        const tag = document.getElementById('lbl-brain-tag');
+        if (tag) {
+          tag.textContent = this.brainType === 'worm' ? 'C. elegans Connectome (Cook 2019)' : 'Fly Central Complex (16-EPG CX)';
+        }
+      };
+    }
+
     // Threat button
     document.getElementById('btn-threat').onclick = () => {
       this.arena.launchThreat(this.robot.getPose());
@@ -91,7 +117,7 @@ class RoverApp {
       this.robot.x = 0;
       this.robot.y = 0;
       this.robot.yaw = 0;
-      this.brain.initCompassBump(0);
+      this.flyBrain.initCompassBump(0);
     };
   }
 
@@ -160,9 +186,9 @@ class RoverApp {
       this.analysisCanvas = document.createElement('canvas');
       this.analysisCanvas.width = 64;
       this.analysisCanvas.height = 48;
-      this.analysisCtx = this.analysisCanvas.getContext('2d');
+      this.analysisCtx = this.analysisCanvas.getContext('2d', { willReadFrequently: true });
       this.prevMean = null;
-      this.prevDarkRadius = 0;
+      this.prevDarkRadius = null;
     }
     const ctx = this.analysisCtx;
     ctx.drawImage(img, 0, 0, 64, 48);
@@ -182,9 +208,14 @@ class RoverApp {
     }
 
     const radius = Math.sqrt(darkPixels / Math.PI);
-    if (this.prevDarkRadius > 2.0 && radius > this.prevDarkRadius) {
-      const expansionRate = (radius - this.prevDarkRadius) / 0.033;
-      if (expansionRate > 8.0) {
+    if (this.prevDarkRadius === null) {
+      this.prevDarkRadius = radius;
+      return;
+    }
+    const deltaRadius = radius - this.prevDarkRadius;
+    if (this.prevDarkRadius > 3.0 && deltaRadius > 1.2) {
+      const expansionRate = deltaRadius / 0.033;
+      if (expansionRate > 15.0) {
         const tau = radius / expansionRate;
         const centerX = darkPixels > 0 ? (sumX / darkPixels) / 32 - 1.0 : 0;
         this.lastThreatData = {
@@ -195,7 +226,7 @@ class RoverApp {
         };
       }
     }
-    this.prevDarkRadius = 0.7 * this.prevDarkRadius + 0.3 * radius;
+    this.prevDarkRadius = 0.85 * this.prevDarkRadius + 0.15 * radius;
   }
 
   animate(now) {
@@ -210,17 +241,67 @@ class RoverApp {
       this.lastThreatData = null;
     }
 
-    // 2. Step Excised Fly Brain
+    // 2. Step Connectome Brain (Fruit Fly or C. elegans)
     const robotPose = this.robot.getPose();
-    const brainOut = this.brain.step({
-      angularVelocity: robotPose.omega,
-      goalX: this.arena.goalPos.x,
-      goalY: this.arena.goalPos.y,
-      robotX: robotPose.x,
-      robotY: robotPose.y,
-      threat: activeThreat,
-      dt
-    });
+    let brainOut;
+
+    if (this.brainType === 'worm' && this.wormBrain) {
+      const threatLevel = activeThreat ? (activeThreat.strength || 20) / 30 : 0;
+      const dx = this.arena.goalPos.x - robotPose.x;
+      const dy = this.arena.goalPos.y - robotPose.y;
+      const distToGoal = Math.hypot(dx, dy);
+      const targetAngle = Math.atan2(dy, dx);
+      let headingErr = targetAngle - robotPose.yaw;
+      while (headingErr > Math.PI) headingErr -= 2 * Math.PI;
+      while (headingErr < -Math.PI) headingErr += 2 * Math.PI;
+
+      const wormOut = this.wormBrain.step({
+        noxiousHeadTouch: simThreat ? 1.0 : 0,
+        anteriorLooming: this.lastThreatData ? this.lastThreatData.strength / 30 : 0,
+        dt
+      });
+
+      const steer = Math.max(-1, Math.min(1, headingErr * 1.6 + wormOut.steeringBias * 0.4));
+      const fwd = wormOut.reversalActive ? -0.85 : Math.max(0.12, 0.65 * Math.cos(headingErr));
+      
+      const tank = {
+        left: Math.max(-1, Math.min(1, fwd - steer * 0.45)),
+        right: Math.max(-1, Math.min(1, fwd + steer * 0.45))
+      };
+      const mecanum = {
+        vx: fwd,
+        vy: wormOut.reversalActive ? (steer > 0 ? -0.7 : 0.7) : 0,
+        omega: steer * 1.5
+      };
+
+      brainOut = {
+        tank,
+        mecanum,
+        telemetry: {
+          epg: new Array(16).fill(0).map((_, i) => Math.abs(i - 8) < 3 ? 0.8 : 0.1),
+          currentHeading: robotPose.yaw,
+          goalHeading: targetAngle,
+          distToGoal,
+          pfl3L: Math.max(0, -headingErr),
+          pfl3R: Math.max(0, headingErr),
+          steeringCmd: steer,
+          opticalTau: activeThreat?.tau || 999,
+          lc4Threat: threatLevel,
+          mdnActive: wormOut.reversalActive,
+          mdnTimer: wormOut.reversalActive ? 0.5 : 0
+        }
+      };
+    } else {
+      brainOut = this.flyBrain.step({
+        angularVelocity: robotPose.omega,
+        goalX: this.arena.goalPos.x,
+        goalY: this.arena.goalPos.y,
+        robotX: robotPose.x,
+        robotY: robotPose.y,
+        threat: activeThreat,
+        dt
+      });
+    }
 
     // 3. Step Robot Kinematics
     this.robot.step(brainOut, dt, this.arena.radius);
