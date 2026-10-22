@@ -92,7 +92,7 @@ export class CelegansConnectomeEngine {
   /**
    * Step the biophysical connectome equations by dt seconds
    */
-  step({ noxiousHeadTouch = 0, anteriorLooming = 0, posteriorTouch = 0, foodOdor = 0, dt = 0.005 }) {
+  step({ noxiousHeadTouch = 0, anteriorLooming = 0, posteriorTouch = 0, foodOdor = 0, odorL = 0, odorR = 0, dt = 0.005 }) {
     const N = this.N;
     const V = this.V;
     const dV_dt = new Float32Array(N);
@@ -130,6 +130,22 @@ export class CelegansConnectomeEngine {
     if (foodOdor > 0) {
       for (const i of this.idxAVB) I_stim[i] += foodOdor * 0.5;
       for (const i of this.idxPVC) I_stim[i] += foodOdor * 0.5;
+    }
+
+    // Bilateral food chemotaxis: differential amphid input (ASEL vs ASER, AWCL vs AWCR)
+    // and head motor neuron steering (SMDDL/RMDDL vs SMDDR/RMDDR)
+    const stimOdorL = Math.max(odorL, foodOdor > 0 && odorL === 0 ? foodOdor * 0.5 : 0);
+    const stimOdorR = Math.max(odorR, foodOdor > 0 && odorR === 0 ? foodOdor * 0.5 : 0);
+
+    if (stimOdorL > 0 || stimOdorR > 0) {
+      if (this.named['ASEL'] !== undefined) I_stim[this.named['ASEL']] += stimOdorL * 1.5;
+      if (this.named['ASER'] !== undefined) I_stim[this.named['ASER']] += stimOdorR * 1.5;
+      if (this.named['AWCL'] !== undefined) I_stim[this.named['AWCL']] += stimOdorL * 1.2;
+      if (this.named['AWCR'] !== undefined) I_stim[this.named['AWCR']] += stimOdorR * 1.2;
+      if (this.named['SMDDL'] !== undefined) I_stim[this.named['SMDDL']] += stimOdorL * 0.9;
+      if (this.named['SMDDR'] !== undefined) I_stim[this.named['SMDDR']] += stimOdorR * 0.9;
+      if (this.named['RMDDL'] !== undefined) I_stim[this.named['RMDDL']] += stimOdorL * 0.7;
+      if (this.named['RMDDR'] !== undefined) I_stim[this.named['RMDDR']] += stimOdorR * 0.7;
     }
 
     // Posterior tail touch -> PLM & AVB

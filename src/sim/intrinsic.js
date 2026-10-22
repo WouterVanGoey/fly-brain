@@ -18,7 +18,18 @@
 // this.rand() at the same points, so a default-on set is behaviourally identical.
 import { DN_ROLES } from './motor.js';
 import { createScaffoldSet, bindScaffoldParams } from './scaffold/index.js';
-const TYPES = { fwd: Object.keys(DN_ROLES.forward), turn: ['DNa02', 'DNa01'], groom: ['DNg07', 'DNg08', 'DNg12'], back: ['MDN'], brake: Object.keys(DN_ROLES.forward), takeoff: Object.keys(DN_ROLES.takeoff) };
+// Exclude steering descending neurons from pure forward locomotion drive.
+// Pulsing steering DNs during forward walking excites asymmetric connectome pathways,
+// causing the fly to spin in circles instead of walking straight.
+const STEER_DNS = ['DNa01', 'DNa02', 'DNp09'];
+const TYPES = {
+  fwd: Object.keys(DN_ROLES.forward).filter(k => !STEER_DNS.includes(k)),
+  turn: ['DNa02', 'DNa01'],
+  groom: ['DNg07', 'DNg08', 'DNg12'],
+  back: ['MDN'],
+  brake: Object.keys(DN_ROLES.forward),
+  takeoff: Object.keys(DN_ROLES.takeoff)
+};
 export const INTRINSIC = {
   walkBout: [2.2, 0.9],     // lognormal bout durations: median s, log-sd
   stopBout: [1.4, 0.9],

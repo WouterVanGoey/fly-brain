@@ -165,18 +165,31 @@ class RoverApp {
   pollTouchPlus() {
     if (this.visionSource !== 'touchplus') return;
     const camImgEl = document.getElementById('camera-preview-img');
+    const camStatusEl = document.getElementById('cam-status');
 
     this.cameraImg.onload = () => {
       if (this.visionSource !== 'touchplus') return;
-      camImgEl.src = this.cameraImg.src;
+      if (camImgEl) {
+        camImgEl.style.display = 'block';
+        camImgEl.src = this.cameraImg.src;
+      }
+      if (camStatusEl) {
+        camStatusEl.textContent = 'Touch+ Live Stream (Active)';
+        camStatusEl.style.color = '#22c55e';
+      }
 
       // Optical expansion estimate from stereo frame
       this.estimateOpticalExpansion(this.cameraImg);
 
-      setTimeout(() => this.pollTouchPlus(), 33); // 30 FPS
+      setTimeout(() => this.pollTouchPlus(), 50); // 20 FPS
     };
     this.cameraImg.onerror = () => {
-      setTimeout(() => this.pollTouchPlus(), 200);
+      if (camStatusEl) {
+        camStatusEl.textContent = 'Touch+ Offline / Disconnected';
+        camStatusEl.style.color = '#ef4444';
+      }
+      if (camImgEl) camImgEl.style.display = 'none';
+      setTimeout(() => this.pollTouchPlus(), 500);
     };
     this.cameraImg.src = `http://127.0.0.1:5174/api/latest.png?t=${Date.now()}`;
   }
@@ -261,9 +274,19 @@ class RoverApp {
         dt
       });
 
-      const steer = Math.max(-1, Math.min(1, headingErr * 1.6 + wormOut.steeringBias * 0.4));
-      const fwd = wormOut.reversalActive ? -0.85 : Math.max(0.12, 0.65 * Math.cos(headingErr));
+      let steer = Math.max(-1, Math.min(1, headingErr * 1.6 + wormOut.steeringBias * 0.4));
+      let fwd = wormOut.reversalActive ? -0.85 : Math.max(0.12, 0.65 * Math.cos(headingErr));
       
+      // Arrival deadband & deceleration ramp (< 8 cm stops chatter; < 35 cm slows smoothly)
+      if (distToGoal < 0.08) {
+        fwd = 0;
+        steer = 0;
+      } else if (distToGoal < 0.35) {
+        const brakeFactor = Math.max(0, (distToGoal - 0.08) / (0.35 - 0.08));
+        fwd *= brakeFactor;
+        if (distToGoal < 0.20) steer *= brakeFactor;
+      }
+
       const tank = {
         left: Math.max(-1, Math.min(1, fwd - steer * 0.45)),
         right: Math.max(-1, Math.min(1, fwd + steer * 0.45))

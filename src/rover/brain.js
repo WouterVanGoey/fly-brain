@@ -228,10 +228,19 @@ export class ExcisedFlyBrain {
     let steeringCmd = (this.pfl3L - this.pfl3R) * this.steerGain;
     steeringCmd = Math.max(-1.0, Math.min(1.0, steeringCmd));
 
-    // Forward drive scaling: slows down when heading error is large or close to goal
+    // Forward drive scaling with arrival deadband to prevent oscillation at the goal
     let fwdDrive = this.baseSpeed * Math.max(0.15, Math.cos(headingError));
-    if (distToGoal < 0.25) {
-      fwdDrive *= (distToGoal / 0.25); // Smooth arrival braking
+    if (distToGoal < 0.08) {
+      // Arrived inside deadband (< 8 cm): hold position, zero out steering chatter
+      fwdDrive = 0.0;
+      steeringCmd = 0.0;
+    } else if (distToGoal < 0.35) {
+      // Smooth arrival deceleration ramp
+      const brakeFactor = Math.max(0, (distToGoal - 0.08) / (0.35 - 0.08));
+      fwdDrive *= brakeFactor;
+      if (distToGoal < 0.20) {
+        steeringCmd *= brakeFactor; // Damp steering near origin
+      }
     }
 
     // 6. Motor Command Generation:

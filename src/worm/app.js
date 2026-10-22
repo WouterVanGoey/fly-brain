@@ -140,15 +140,28 @@ class WormApp {
   pollTouchPlus() {
     if (this.visionSource !== 'touchplus') return;
     const camImgEl = document.getElementById('camera-preview-img');
+    const camStatusEl = document.getElementById('cam-status');
 
     this.cameraImg.onload = () => {
       if (this.visionSource !== 'touchplus') return;
-      camImgEl.src = this.cameraImg.src;
+      if (camImgEl) {
+        camImgEl.style.display = 'block';
+        camImgEl.src = this.cameraImg.src;
+      }
+      if (camStatusEl) {
+        camStatusEl.textContent = 'Touch+ Live Stream (Active)';
+        camStatusEl.style.color = '#22c55e';
+      }
       this.estimateOpticalExpansion(this.cameraImg);
-      setTimeout(() => this.pollTouchPlus(), 33);
+      setTimeout(() => this.pollTouchPlus(), 50);
     };
     this.cameraImg.onerror = () => {
-      setTimeout(() => this.pollTouchPlus(), 200);
+      if (camStatusEl) {
+        camStatusEl.textContent = 'Touch+ Offline / Disconnected';
+        camStatusEl.style.color = '#ef4444';
+      }
+      if (camImgEl) camImgEl.style.display = 'none';
+      setTimeout(() => this.pollTouchPlus(), 500);
     };
     this.cameraImg.src = `http://127.0.0.1:5174/api/latest.png?t=${Date.now()}`;
   }
@@ -196,14 +209,27 @@ class WormApp {
     const simThreat = this.arena.updateThreat(now);
     const totalThreat = Math.max(simThreat, this.lastThreatLevel);
 
-    // 2. Step C. elegans biophysical connectome
+    // 2. Step C. elegans biophysical connectome with bilateral chemotaxis
     const headPose = this.body.getHeadPose();
-    const distToFood = Math.hypot(this.arena.foodPos.x - headPose.x, this.arena.foodPos.y - headPose.y);
+    const dx = this.arena.foodPos.x - headPose.x;
+    const dy = this.arena.foodPos.y - headPose.y;
+    const distToFood = Math.hypot(dx, dy);
+    const foodAngle = Math.atan2(dy, dx);
+    let relAngle = foodAngle - headPose.heading;
+    while (relAngle > Math.PI) relAngle -= 2 * Math.PI;
+    while (relAngle < -Math.PI) relAngle += 2 * Math.PI;
+
+    // Bilateral amphid receptive fields (ASEL/AWCL on left, ASER/AWCR on right)
+    const baseOdor = Math.max(0, 1.0 - distToFood / 2.5);
+    const odorL = baseOdor * Math.max(0, Math.cos(relAngle - Math.PI * 0.25));
+    const odorR = baseOdor * Math.max(0, Math.cos(relAngle + Math.PI * 0.25));
 
     const brainOut = this.brain.step({
       noxiousHeadTouch: simThreat,
       anteriorLooming: this.lastThreatLevel,
-      foodOdor: Math.max(0, 1.0 - distToFood / 1.5),
+      foodOdor: baseOdor,
+      odorL,
+      odorR,
       dt
     });
 

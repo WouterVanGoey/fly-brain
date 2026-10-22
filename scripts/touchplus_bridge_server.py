@@ -234,26 +234,26 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif self.path.startswith("/api/latest.png") or self.path.startswith("/api/frame"):
-            # Serve the newest stereo frame from active session or fallback
+            # Serve the newest stereo frame ONLY from active live hardware session
             png_bytes = None
             seq = 0
+            is_live = False
             with lock:
+                present = state.get("device_present", False)
+                mode = state.get("mode", "")
                 sess_path = state.get("active_session")
                 seq = state.get("latest_png_sequence", 0)
+                is_live = present and (mode == "live_hardware" or "streaming" in mode)
 
-            if sess_path:
+            if is_live and sess_path:
                 session_png = Path(sess_path) / "latest.png"
                 if session_png.is_file():
                     try:
-                        png_bytes = session_png.read_bytes()
+                        # Check that the frame was modified within the last 2.5 seconds
+                        if time.time() - session_png.stat().st_mtime < 2.5:
+                            png_bytes = session_png.read_bytes()
                     except Exception:
                         pass
-
-            if png_bytes is None and FALLBACK_PNG.is_file():
-                try:
-                    png_bytes = FALLBACK_PNG.read_bytes()
-                except Exception:
-                    pass
 
             if png_bytes:
                 self.send_response(200)
@@ -261,13 +261,45 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(png_bytes)))
                 self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
                 self.send_header("X-Sequence", str(seq))
+                self.send_header("X-Hardware-Status", "live")
                 self.end_headers()
                 self.wfile.write(png_bytes)
             else:
-                self.send_response(404)
+                # Truthful hardware state: 503 Service Unavailable, NEVER serve stale fallback as live stream
+                err_payload = json.dumps({
+                    "error": "hardware_not_streaming",
+                    "device_present": state.get("device_present", False),
+                    "mode": state.get("mode", "disconnected"),
+                    "message": "Touch+ camera is not connected or not actively streaming. Fallback disabled."
+                }).encode("utf-8")
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err_payload)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
                 self.end_headers()
+                self.wfile.write(err_payload)
 
         elif self.path in ("/stream", "/api/stream.mjpg"):
+            with lock:
+                present = state.get("device_present", False)
+                mode = state.get("mode", "")
+                is_live = present and (mode == "live_hardware" or "streaming" in mode)
+
+            if not is_live:
+                err_payload = json.dumps({
+                    "error": "hardware_not_streaming",
+                    "device_present": state.get("device_present", False),
+                    "mode": state.get("mode", "disconnected"),
+                    "message": "Touch+ camera stream unavailable."
+                }).encode("utf-8")
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err_payload)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(err_payload)
+                return
+
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -277,20 +309,21 @@ class BridgeHandler(BaseHTTPRequestHandler):
             try:
                 while True:
                     with lock:
+                        present = state.get("device_present", False)
+                        mode = state.get("mode", "")
                         sess_path = state.get("active_session")
+                        is_live = present and (mode == "live_hardware" or "streaming" in mode)
+                    if not is_live:
+                        break
                     png_bytes = None
                     if sess_path:
                         session_png = Path(sess_path) / "latest.png"
                         if session_png.is_file():
                             try:
-                                png_bytes = session_png.read_bytes()
+                                if time.time() - session_png.stat().st_mtime < 2.5:
+                                    png_bytes = session_png.read_bytes()
                             except Exception:
                                 pass
-                    if png_bytes is None and FALLBACK_PNG.is_file():
-                        try:
-                            png_bytes = FALLBACK_PNG.read_bytes()
-                        except Exception:
-                            pass
                     if png_bytes:
                         self.wfile.write(b"--frame\r\n")
                         self.wfile.write(b"Content-Type: image/png\r\n")

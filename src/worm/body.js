@@ -129,15 +129,41 @@ export class NematodeBody {
     }
 
     // 2. Integrate segment angles and positions from head to tail
-    // Head heading advances according to head curvature & forward velocity
+    // Steering turns the propagation heading smoothly without being swamped by undulation wave
     const speed = (isReversing ? -0.45 : (0.28 + fwdDrive * 0.45)) * dt;
-    this.headHeading += (this.curvatures[0] * 0.4 + steering * 0.6) * dt * (isReversing ? -1 : 1);
+    this.headHeading += steering * 2.2 * dt * (isReversing ? -1 : 1);
 
-    this.points[0].x += speed * Math.cos(this.headHeading);
-    this.points[0].y += speed * Math.sin(this.headHeading);
+    // Tentative new head position
+    let newX = this.points[0].x + speed * Math.cos(this.headHeading);
+    let newY = this.points[0].y + speed * Math.sin(this.headHeading);
+
+    // Petri Dish Wall Collision & Containment Constraint (Radius = 2.05 mm)
+    // Prevents worm from crawling outside the petri dish boundary
+    const dishRadius = 2.05;
+    const currentDist = Math.hypot(newX, newY);
+    if (currentDist > dishRadius) {
+      // Clamp position inside dish boundary
+      newX = (newX / currentDist) * dishRadius;
+      newY = (newY / currentDist) * dishRadius;
+
+      // Glancing reflection along perimeter
+      const wallNormal = Math.atan2(newY, newX);
+      let angleToNormal = this.headHeading - wallNormal;
+      while (angleToNormal > Math.PI) angleToNormal -= 2 * Math.PI;
+      while (angleToNormal < -Math.PI) angleToNormal += 2 * Math.PI;
+
+      // Turn inward away from glass rim
+      if (Math.abs(angleToNormal) < Math.PI * 0.6) {
+        this.headHeading = wallNormal + (angleToNormal >= 0 ? Math.PI * 0.6 : -Math.PI * 0.6);
+      }
+    }
+
+    this.points[0].x = newX;
+    this.points[0].y = newY;
 
     // Segment follow constraint with curvature bending
-    let currentAngle = this.headHeading;
+    // The head segment yaws gently with the wave for realistic undulation
+    let currentAngle = this.headHeading + this.curvatures[0] * 0.25;
     for (let i = 1; i < this.numSegments; i++) {
       currentAngle += this.curvatures[i] * (this.segLength * 0.9);
       this.points[i].x = this.points[i - 1].x - this.segLength * Math.cos(currentAngle);
